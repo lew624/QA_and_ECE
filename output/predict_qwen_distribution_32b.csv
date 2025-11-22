@@ -1,0 +1,6 @@
+input_id,qkey,question_raw,pred_A,pred_B,pred_C,pred_D
+id0,SAFECRIME_W26,"How safe, if at all, would you say your local community is from crime? Would you say it is",0.2631578947368421,0.4736842105263158,0.2105263157894737,0.052631578947368425
+id1,WORLDDANGER_W26,"Compared to 50 years ago, do you think",0.2631578947368421,0.5263157894736842,0.2105263157894737,
+id2,WORRYA_W26,"How much, if at all, do you worry about the following happening to you? Having your home broken into",0.4210526315789474,0.3157894736842105,0.2631578947368421,
+id3,WORRYB_W26,"How much, if at all, do you worry about the following happening to you? Being the victim of a terrorist attack",0.2631578947368421,0.3684210526315789,0.3684210526315789,
+id4,WORRYC_W26,"How much, if at all, do you worry about the following happening to you? Losing your job",0.4210526315789474,0.3157894736842105,0.2631578947368421,

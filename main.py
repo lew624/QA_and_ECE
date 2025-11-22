@@ -1,107 +1,89 @@
 # main.py
-
 import os
-import ast
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from config import *
-from prompts import get_chat_messages
-from distribution import parse_model_output
-from data_utils import load_data, save_all_results
+from config.config import config
+from core.api_predictor import APIPredictor
+from core.local_predictor import LocalPredictor
+from utils.data_loader import DataLoader
+from utils.file_saver import FileSaver
 
-def load_model():
-    """加载模型和tokenizer"""
-    print("正在加载Qwen2.5-7B模型...")
-    tok = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        trust_remote_code=True,
-        device_map="auto" if device=="cuda" else None,
-        torch_dtype=torch.float16 if device=="cuda" else torch.float32
-    )
-    print("模型加载完成！")
-    return tok, model
-
-def predict_one(tok, model, q_raw, mapping):
-    """预测单个问题的分布"""
-    messages = get_chat_messages(q_raw, mapping)
-    
-    try:
-        # 应用聊天模板
-        text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tok(text, return_tensors="pt").to(model.device)
-        
-        # 更新生成配置
-        gen_config = GENERATION_CONFIG.copy()
-        gen_config["pad_token_id"] = tok.eos_token_id
-        
-        with torch.no_grad():
-            out_ids = model.generate(
-                **inputs,
-                **gen_config
-            )
-        
-        reply = tok.decode(out_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
-        
-        # 解析模型输出
-        dist = parse_model_output(reply, mapping)
-        return dist
-        
-    except Exception as e:
-        print(f"预测过程中出错: {e}")
-        # 返回均匀分布（去掉refused后）
-        from distribution import remove_refused_and_renormalize
-        uni_dist = remove_refused_and_renormalize({k: 1.0 for k in mapping}, mapping)
-        return uni_dist
+def create_predictor():
+    """创建预测器实例"""
+    if config.model.model_type == "deepseek":
+        return APIPredictor()
+    elif "qwen" in config.model.model_type:
+        return LocalPredictor()
+    else:
+        raise ValueError(f"不支持的模型类型: {config.model.model_type}")
 
 def main():
     """主函数"""
-    # 创建输出目录
-    os.makedirs("./output", exist_ok=True)
+    print("=== 美国人口调查预测系统 ===")
+    print(f"模型类型: {config.model.model_type}")
+    print(f"输出类型: {config.model.output_type}")
+    if "qwen" in config.model.model_type:
+        print(f"多GPU: {config.model.use_multi_gpu}")
     
-    # 加载模型
-    tok, model = load_model()
+    # 创建预测器
+    predictor = create_predictor()
+    predictor.initialize()
     
-    # 读取数据
-    df = load_data(EXCEL_PATH)
+    # 加载数据
+    questions = DataLoader.load_questions()
     
+    # 文件保存器
+    file_saver = FileSaver(predictor)
+    
+    # 开始预测
     results = {}
-    
     print("开始预测...")
-    for _, row in tqdm(df.iterrows(), total=len(df)):
+    
+    for question in tqdm(questions, desc="处理问题"):
         try:
-            qid = row["input_id"]
-            q_raw = row["question_raw"]
-            mapping = ast.literal_eval(row["mapping"])
+            qid = question['input_id']
+            q_raw = question['question_raw']
+            mapping = question['mapping']
             
             # 预测分布
-            dist = predict_one(tok, model, q_raw, mapping)
+            dist = predictor.predict_one(q_raw, mapping)
             results[qid] = dist
             
             # 打印第一个问题的结果作为示例
             if len(results) == 1:
                 print(f"\n第一个问题预测结果示例:")
                 print(f"问题ID: {qid}")
-                print(f"问题Key: {row['qkey']}")
+                print(f"问题Key: {question['qkey']}")
                 print(f"问题: {q_raw}")
                 print(f"预测分布: {dist}")
-                print(f"概率总和: {sum(dist.values()):.4f}")
+                
+                if config.model.output_type == "logits":
+                    prob_dist = predictor.logits_to_probability(dist)
+                    print(f"转换后的概率分布: {prob_dist}")
+                    print(f"概率总和: {sum(prob_dist.values()):.4f}")
+                else:
+                    print(f"概率总和: {sum(dist.values()):.4f}")
                 
         except Exception as e:
-            print(f"处理问题 {qid} 时出错: {e}")
+            print(f"处理问题 {question.get('input_id', 'unknown')} 时出错: {e}")
             continue
     
-    # 保存所有结果
-    save_all_results(results, df)
+    # 保存结果
+    file_saver.save_results(results, questions)
     
     # 打印统计信息
+    output_files = file_saver.get_output_files()
     print(f"\n=== 预测完成 ===")
     print(f"总问题数: {len(results)}")
     print(f"输出文件:")
-    print(f"  - JSON: {SAVE_JSON_PATH}")
-    print(f"  - Excel: {SAVE_EXCEL_PATH}")
-    print(f"  - CSV: {SAVE_CSV_PATH}")
+    for file_type, file_path in output_files.items():
+        if os.path.exists(file_path):
+            print(f"  - {file_type.upper()}: {file_path}")
 
 if __name__ == "__main__":
+    # 在这里修改配置即可切换不同模型和输出类型
+    # config.update_model_config(model_type="deepseek", output_type="logits")  # Deepseek API + logits
+    # config.update_model_config(model_type="qwen7b", output_type="probability")  # Qwen 7B + 概率
+    config.update_model_config(model_type="qwen32b", output_type="logits", use_multi_gpu=True)  # Qwen 32B + logits + 多GPU
+    
     main()
